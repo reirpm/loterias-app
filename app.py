@@ -170,9 +170,96 @@ def gerar_jogos(df, quantidade, soma_min, soma_max, pares_min, pares_max, max_re
 # Interface
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="Loterias - Dia de Sorte", layout="wide")
+st.set_page_config(page_title="Dia de Sorte — Painel", page_icon="🍀", layout="wide")
 
-st.sidebar.title("🍀 Dia de Sorte")
+# ---------------------------------------------------------------------------
+# Identidade visual — paleta "bilhete de loteria": verde-cédula + carimbo dourado
+# ---------------------------------------------------------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
+html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
+
+[data-testid="stAppViewContainer"] { background: #0F2A1E; }
+[data-testid="stHeader"] { background: transparent; }
+
+[data-testid="stSidebar"] {
+    background: #163826;
+    border-right: 1px solid rgba(217,164,65,0.35);
+}
+[data-testid="stSidebar"] * { color: #F3EFE4 !important; }
+
+h1, h2, h3 {
+    font-family: 'Fraunces', serif !important;
+    color: #F3EFE4 !important;
+    letter-spacing: -0.01em;
+}
+p, span, label, .stCaption, [data-testid="stCaptionContainer"] { color: #E4DFCF !important; }
+
+[data-testid="stMetric"] {
+    background: #163826;
+    border: 1px solid rgba(217,164,65,0.35);
+    border-radius: 10px;
+    padding: 14px 16px;
+}
+[data-testid="stMetricLabel"] { color: #D9A441 !important; }
+[data-testid="stMetricValue"] { color: #F3EFE4 !important; font-family: 'IBM Plex Mono', monospace !important; }
+
+.stButton > button, .stFormSubmitButton > button {
+    background: #D9A441; color: #0F2A1E; border: none;
+    border-radius: 8px; font-weight: 600; padding: 0.5em 1.2em;
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover { background: #C79433; color: #0F2A1E; }
+
+[data-testid="stForm"], [data-testid="stExpander"] {
+    background: #163826;
+    border: 1px solid rgba(217,164,65,0.25);
+    border-radius: 12px;
+}
+
+[data-testid="stDataFrame"] { border: 1px solid rgba(217,164,65,0.25); border-radius: 8px; }
+
+.selo-topo {
+    display: flex; align-items: center; gap: 14px;
+    border-bottom: 2px dashed rgba(217,164,65,0.5);
+    padding-bottom: 14px; margin-bottom: 18px;
+}
+.selo-icone {
+    width: 46px; height: 46px; border-radius: 50%;
+    border: 2px solid #D9A441; display: flex; align-items: center;
+    justify-content: center; font-size: 22px; flex-shrink: 0;
+}
+.selo-texto p { margin: 0; color: #D9A441 !important; font-size: 0.85rem; letter-spacing: 0.05em; text-transform: uppercase; }
+
+.dezena-bola {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 42px; height: 42px; margin: 3px 5px 3px 0;
+    border-radius: 50%; background: #0F2A1E; border: 2px solid #D9A441;
+    color: #F3EFE4 !important; font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600; font-size: 0.95rem;
+}
+.dezena-bola.destaque { background: #D9A441; color: #0F2A1E !important; border-color: #F3EFE4; }
+</style>
+""", unsafe_allow_html=True)
+
+
+def selo_topo(icone, rotulo, titulo):
+    st.markdown(f"""
+    <div class="selo-topo">
+        <div class="selo-icone">{icone}</div>
+        <div class="selo-texto"><p>{rotulo}</p><h1 style="margin:0;">{titulo}</h1></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def dezenas_html(dezenas, destaque=False):
+    classe = "dezena-bola destaque" if destaque else "dezena-bola"
+    bolas = "".join(f'<span class="{classe}">{d:02d}</span>' for d in dezenas)
+    return f'<div style="margin:6px 0 10px 0;">{bolas}</div>'
+
+
+st.sidebar.markdown("### 🍀 Dia de Sorte")
 pagina = st.sidebar.radio(
     "Navegação",
     ["📊 Estatísticas", "🎲 Gerador de Jogos", "🔍 Consultar Concurso", "🔄 Atualizar Base"],
@@ -182,7 +269,7 @@ df = carregar_concursos()
 st.sidebar.markdown(f"---\n**{len(df)}** concursos carregados\n\nÚltimo: **{int(df['concurso'].max())}**")
 
 if pagina == "📊 Estatísticas":
-    st.title("Estatísticas do Dia de Sorte")
+    selo_topo("📊", "Painel", "Estatísticas do Dia de Sorte")
     st.caption(
         "Estas estatísticas descrevem o que já aconteceu no histórico. "
         "Elas não preveem o próximo resultado — cada sorteio é independente."
@@ -216,7 +303,7 @@ if pagina == "📊 Estatísticas":
     c3.metric("Máxima", int(somas.max()))
 
 elif pagina == "🎲 Gerador de Jogos":
-    st.title("Gerador de Jogos")
+    selo_topo("🎲", "Ferramenta", "Gerador de Jogos")
     st.caption(
         "Gera combinações respeitando os padrões estatísticos escolhidos abaixo. "
         "Isto organiza apostas dentro de padrões históricos — não é previsão."
@@ -241,11 +328,11 @@ elif pagina == "🎲 Gerador de Jogos":
             for indice, jogo in enumerate(jogos, start=1):
                 soma = sum(jogo)
                 pares = sum(1 for d in jogo if d % 2 == 0)
-                dezenas_formatadas = " - ".join(f"{d:02d}" for d in jogo)
-                st.success(f"Jogo {indice}: {dezenas_formatadas}   (soma={soma}, pares={pares})")
+                st.markdown(f"**Jogo {indice}**  (soma={soma}, pares={pares})", unsafe_allow_html=True)
+                st.markdown(dezenas_html(jogo), unsafe_allow_html=True)
 
 elif pagina == "🔍 Consultar Concurso":
-    st.title("Consultar Concurso")
+    selo_topo("🔍", "Consulta", "Consultar Concurso")
 
     numero = st.number_input(
         "Número do concurso", min_value=int(df["concurso"].min()),
@@ -259,7 +346,7 @@ elif pagina == "🔍 Consultar Concurso":
         linha = linha.iloc[0]
         dezenas = [int(linha[f"bola{i}"]) for i in range(1, 8)]
         st.subheader(f"Concurso {int(linha['concurso'])} — {linha['data']}")
-        st.write(" - ".join(f"{d:02d}" for d in dezenas))
+        st.markdown(dezenas_html(dezenas, destaque=True), unsafe_allow_html=True)
         st.write(f"Mês da sorte: **{linha['mes_da_sorte']}**")
 
         c1, c2, c3, c4 = st.columns(4)
@@ -269,7 +356,7 @@ elif pagina == "🔍 Consultar Concurso":
         c4.metric("Ganhadores 4 acertos", int(linha["ganhadores_4"]))
 
 elif pagina == "🔄 Atualizar Base":
-    st.title("Atualizar Base de Dados")
+    selo_topo("🔄", "Manutenção", "Atualizar Base de Dados")
     st.write(
         "Busca automaticamente, direto na Caixa, os concursos que ainda não "
         "estão salvos no banco local."
