@@ -14,6 +14,7 @@ from collections import Counter
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
 
 BANCO = "loterias.db"
@@ -268,6 +269,78 @@ def gerar_jogos(df, quantidade, soma_min, soma_max, pares_min, pares_max, max_re
 
 
 # ---------------------------------------------------------------------------
+# Gerador de Jogos Inteligente — combina os critérios avançados de uma vez
+# ---------------------------------------------------------------------------
+
+def calcular_pesos_frequencia(df, janela):
+    """Converte a frequência recente de cada dezena em pesos de sorteio (soma = 1)."""
+    freq = calcular_frequencia_janela(df, janela)
+    ajustado = {d: freq[d] + 1 for d in freq}  # +1 evita peso zero para dezenas que não saíram
+    total = sum(ajustado.values())
+    return {d: valor / total for d, valor in ajustado.items()}
+
+
+def sortear_ponderado(pesos_dict):
+    """Sorteia 7 dezenas sem repetição, dando mais chance às de maior peso."""
+    dezenas = list(range(DEZENA_MIN, DEZENA_MAX + 1))
+    pesos = np.array([pesos_dict[d] for d in dezenas])
+    pesos = pesos / pesos.sum()
+    escolhidos = np.random.choice(dezenas, size=QTD_DEZENAS_POR_JOGO, replace=False, p=pesos)
+    return sorted(int(d) for d in escolhidos)
+
+
+def jogo_valido_inteligente(jogo, ultimo_concurso, filtros):
+    soma = sum(jogo)
+    if not (filtros["soma_min"] <= soma <= filtros["soma_max"]):
+        return False
+
+    pares = sum(1 for d in jogo if d % 2 == 0)
+    if not (filtros["pares_min"] <= pares <= filtros["pares_max"]):
+        return False
+
+    if len(set(jogo) & ultimo_concurso) > filtros["max_repetidos"]:
+        return False
+
+    primos_qtd = sum(1 for d in jogo if d in PRIMOS)
+    if not (filtros["primos_min"] <= primos_qtd <= filtros["primos_max"]):
+        return False
+
+    fib_qtd = sum(1 for d in jogo if d in FIBONACCI)
+    if not (filtros["fib_min"] <= fib_qtd <= filtros["fib_max"]):
+        return False
+
+    numeros = sorted(jogo)
+    seguidas = sum(1 for i in range(1, len(numeros)) if numeros[i] == numeros[i - 1] + 1)
+    if seguidas > filtros["seq_max"]:
+        return False
+
+    amplitude = max(jogo) - min(jogo)
+    if not (filtros["amplitude_min"] <= amplitude <= filtros["amplitude_max"]):
+        return False
+
+    return True
+
+
+def gerar_jogos_inteligente(df, quantidade, filtros, usar_pesos, pesos_dict):
+    ultima_linha = df.iloc[-1]
+    ultimo_concurso = {int(ultima_linha[c]) for c in COLUNAS_DEZENAS}
+    jogos, tentativas = [], 0
+    tentativas_maximas = 30000
+
+    while len(jogos) < quantidade and tentativas < tentativas_maximas:
+        tentativas += 1
+        if usar_pesos:
+            candidato = sortear_ponderado(pesos_dict)
+        else:
+            candidato = sorted(random.sample(range(DEZENA_MIN, DEZENA_MAX + 1), QTD_DEZENAS_POR_JOGO))
+
+        if jogo_valido_inteligente(candidato, ultimo_concurso, filtros) and candidato not in jogos:
+            jogos.append(candidato)
+
+    return jogos, tentativas
+
+
+# ---------------------------------------------------------------------------
 # Interface
 # ---------------------------------------------------------------------------
 
@@ -363,7 +436,8 @@ def dezenas_html(dezenas, destaque=False):
 st.sidebar.markdown("### 🍀 Dia de Sorte")
 pagina = st.sidebar.radio(
     "Navegação",
-    ["📊 Estatísticas", "⭐ Estatísticas Avançadas", "🎲 Gerador de Jogos", "🔍 Consultar Concurso", "🔄 Atualizar Base"],
+    ["📊 Estatísticas", "⭐ Estatísticas Avançadas", "🎲 Gerador de Jogos",
+     "🧠 Gerador Inteligente", "🔍 Consultar Concurso", "🔄 Atualizar Base"],
 )
 
 df = carregar_concursos()
@@ -527,6 +601,63 @@ elif pagina == "🎲 Gerador de Jogos":
                 soma = sum(jogo)
                 pares = sum(1 for d in jogo if d % 2 == 0)
                 st.markdown(f"**Jogo {indice}**  (soma={soma}, pares={pares})", unsafe_allow_html=True)
+                st.markdown(dezenas_html(jogo), unsafe_allow_html=True)
+
+elif pagina == "🧠 Gerador Inteligente":
+    selo_topo("🧠", "Premium", "Gerador de Jogos Inteligente")
+    st.caption(
+        "Combina vários padrões estatísticos ao mesmo tempo (soma, pares, primos, "
+        "Fibonacci, sequências, amplitude e frequência recente). Continua sendo "
+        "organização de apostas dentro de padrões históricos — não é previsão."
+    )
+
+    with st.form("filtros_inteligente"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            quantidade = st.number_input("Quantos jogos gerar?", 1, 20, 5)
+            soma_min, soma_max = st.slider("Faixa de soma das 7 dezenas", 28, 217, (95, 130))
+            pares_min, pares_max = st.slider("Faixa de dezenas pares", 0, 7, (2, 5))
+        with col2:
+            primos_min, primos_max = st.slider("Faixa de primos no jogo", 0, 7, (1, 4))
+            fib_min, fib_max = st.slider("Faixa de números Fibonacci", 0, 7, (0, 3))
+            seq_max = st.slider("Máx. de sequências consecutivas (ex: 14-15)", 0, 6, 2)
+        with col3:
+            amplitude_min, amplitude_max = st.slider("Faixa de amplitude (maior − menor)", 0, 30, (10, 28))
+            max_repetidos = st.slider("Máx. repetidas do último concurso", 0, 7, 3)
+            usar_pesos = st.checkbox("Priorizar dezenas mais quentes (frequência recente)")
+            janela_pesos = st.select_slider(
+                "Janela para 'quentes'", options=[25, 50, 100], value=50, disabled=not usar_pesos
+            )
+
+        gerar = st.form_submit_button("🧠 Gerar jogos inteligentes")
+
+    if gerar:
+        filtros = dict(
+            soma_min=soma_min, soma_max=soma_max, pares_min=pares_min, pares_max=pares_max,
+            max_repetidos=max_repetidos, primos_min=primos_min, primos_max=primos_max,
+            fib_min=fib_min, fib_max=fib_max, seq_max=seq_max,
+            amplitude_min=amplitude_min, amplitude_max=amplitude_max,
+        )
+        pesos_dict = calcular_pesos_frequencia(df, janela_pesos) if usar_pesos else None
+
+        with st.spinner("Sorteando e filtrando combinações..."):
+            jogos, tentativas = gerar_jogos_inteligente(df, quantidade, filtros, usar_pesos, pesos_dict)
+
+        if not jogos:
+            st.warning(
+                f"Não foi possível gerar jogos com esses filtros (tentei {tentativas} combinações). "
+                "Tente afrouxar algum critério — faixas muito estreitas combinadas ficam difíceis de atender."
+            )
+        else:
+            for indice, jogo in enumerate(jogos, start=1):
+                soma = sum(jogo)
+                pares = sum(1 for d in jogo if d % 2 == 0)
+                primos_qtd = sum(1 for d in jogo if d in PRIMOS)
+                fib_qtd = sum(1 for d in jogo if d in FIBONACCI)
+                st.markdown(
+                    f"**Jogo {indice}**  (soma={soma}, pares={pares}, primos={primos_qtd}, fibonacci={fib_qtd})",
+                    unsafe_allow_html=True,
+                )
                 st.markdown(dezenas_html(jogo), unsafe_allow_html=True)
 
 elif pagina == "🔍 Consultar Concurso":
