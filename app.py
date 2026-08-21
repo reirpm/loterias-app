@@ -10,6 +10,8 @@ Isso abre automaticamente uma aba no navegador com o site.
 import sqlite3
 import random
 import time
+import hashlib
+import secrets
 from collections import Counter
 
 import streamlit as st
@@ -35,6 +37,78 @@ CABECALHOS = {
     "Accept": "application/json, text/plain, */*",
     "Referer": "https://loterias.caixa.gov.br/",
 }
+
+
+# ---------------------------------------------------------------------------
+# Contas de usuário e controle de acesso Premium
+# ---------------------------------------------------------------------------
+
+def inicializar_usuarios():
+    conexao = sqlite3.connect(BANCO)
+    cursor = conexao.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            email TEXT PRIMARY KEY,
+            senha_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            premium INTEGER DEFAULT 0,
+            data_cadastro TEXT
+        )
+    """)
+    conexao.commit()
+    conexao.close()
+
+
+def hash_senha(senha, salt=None):
+    if salt is None:
+        salt = secrets.token_hex(16)
+    resultado = hashlib.sha256((salt + senha).encode()).hexdigest()
+    return resultado, salt
+
+
+def cadastrar_usuario(email, senha):
+    email = email.strip().lower()
+    conexao = sqlite3.connect(BANCO)
+    cursor = conexao.cursor()
+    existente = cursor.execute("SELECT 1 FROM usuarios WHERE email = ?", (email,)).fetchone()
+    if existente:
+        conexao.close()
+        return False, "Esse e-mail já está cadastrado."
+
+    senha_hash, salt = hash_senha(senha)
+    cursor.execute(
+        "INSERT INTO usuarios (email, senha_hash, salt, premium, data_cadastro) VALUES (?,?,?,0,?)",
+        (email, senha_hash, salt, pd.Timestamp.now().isoformat()),
+    )
+    conexao.commit()
+    conexao.close()
+    return True, "Cadastro realizado com sucesso! Agora é só entrar na aba 'Entrar'."
+
+
+def autenticar_usuario(email, senha):
+    email = email.strip().lower()
+    conexao = sqlite3.connect(BANCO)
+    cursor = conexao.cursor()
+    linha = cursor.execute(
+        "SELECT senha_hash, salt, premium FROM usuarios WHERE email = ?", (email,)
+    ).fetchone()
+    conexao.close()
+    if not linha:
+        return False, False
+    senha_hash_salva, salt, premium = linha
+    tentativa, _ = hash_senha(senha, salt)
+    if tentativa == senha_hash_salva:
+        return True, bool(premium)
+    return False, False
+
+
+def ativar_premium_teste(email):
+    """Ativa o Premium manualmente -- provisório, até integrarmos um meio de pagamento real."""
+    conexao = sqlite3.connect(BANCO)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE usuarios SET premium = 1 WHERE email = ?", (email.strip().lower(),))
+    conexao.commit()
+    conexao.close()
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +507,56 @@ def dezenas_html(dezenas, destaque=False):
     return f'<div style="margin:6px 0 10px 0;">{bolas}</div>'
 
 
+inicializar_usuarios()
+
+if "usuario_logado" not in st.session_state:
+    st.session_state.usuario_logado = None
+    st.session_state.usuario_premium = False
+
 st.sidebar.markdown("### 🍀 Dia de Sorte")
+
+if st.session_state.usuario_logado:
+    st.sidebar.success(f"Logado: {st.session_state.usuario_logado}")
+    st.sidebar.caption("⭐ Conta Premium" if st.session_state.usuario_premium else "Conta gratuita")
+
+    if not st.session_state.usuario_premium:
+        st.sidebar.caption("Pagamento real ainda não integrado -- botão abaixo é só para testar o fluxo.")
+        if st.sidebar.button("🔓 Ativar Premium (modo teste)"):
+            ativar_premium_teste(st.session_state.usuario_logado)
+            st.session_state.usuario_premium = True
+            st.rerun()
+
+    if st.sidebar.button("Sair"):
+        st.session_state.usuario_logado = None
+        st.session_state.usuario_premium = False
+        st.rerun()
+else:
+    aba_login, aba_cadastro = st.sidebar.tabs(["Entrar", "Cadastrar"])
+
+    with aba_login:
+        email_login = st.text_input("E-mail", key="email_login")
+        senha_login = st.text_input("Senha", type="password", key="senha_login")
+        if st.button("Entrar", key="btn_entrar"):
+            ok, premium = autenticar_usuario(email_login, senha_login)
+            if ok:
+                st.session_state.usuario_logado = email_login.strip().lower()
+                st.session_state.usuario_premium = premium
+                st.rerun()
+            else:
+                st.error("E-mail ou senha incorretos.")
+
+    with aba_cadastro:
+        email_cad = st.text_input("E-mail", key="email_cad")
+        senha_cad = st.text_input("Senha (mín. 6 caracteres)", type="password", key="senha_cad")
+        if st.button("Cadastrar", key="btn_cadastrar"):
+            if len(senha_cad) < 6:
+                st.error("A senha precisa ter pelo menos 6 caracteres.")
+            elif "@" not in email_cad:
+                st.error("Digite um e-mail válido.")
+            else:
+                ok, mensagem = cadastrar_usuario(email_cad, senha_cad)
+                (st.success if ok else st.error)(mensagem)
+
 pagina = st.sidebar.radio(
     "Navegação",
     ["📊 Estatísticas", "⭐ Estatísticas Avançadas", "🎲 Gerador de Jogos",
@@ -442,6 +565,8 @@ pagina = st.sidebar.radio(
 
 df = carregar_concursos()
 st.sidebar.markdown(f"---\n**{len(df)}** concursos carregados\n\nÚltimo: **{int(df['concurso'].max())}**")
+
+acesso_premium = st.session_state.usuario_logado and st.session_state.usuario_premium
 
 if pagina == "📊 Estatísticas":
     selo_topo("📊", "Painel", "Estatísticas do Dia de Sorte")
@@ -479,6 +604,14 @@ if pagina == "📊 Estatísticas":
 
 elif pagina == "⭐ Estatísticas Avançadas":
     selo_topo("⭐", "Premium", "Estatísticas Avançadas")
+
+    if not acesso_premium:
+        st.warning(
+            "Este recurso é exclusivo para assinantes **Premium**. Faça login (ou "
+            "cadastre-se) e ative o Premium na barra lateral para desbloquear."
+        )
+        st.stop()
+
     st.caption(
         "Camada extra de análise sobre o mesmo histórico. Continua descrevendo "
         "o que já aconteceu — não prevê o próximo resultado."
@@ -605,6 +738,14 @@ elif pagina == "🎲 Gerador de Jogos":
 
 elif pagina == "🧠 Gerador Inteligente":
     selo_topo("🧠", "Premium", "Gerador de Jogos Inteligente")
+
+    if not acesso_premium:
+        st.warning(
+            "Este recurso é exclusivo para assinantes **Premium**. Faça login (ou "
+            "cadastre-se) e ative o Premium na barra lateral para desbloquear."
+        )
+        st.stop()
+
     st.caption(
         "Combina vários padrões estatísticos ao mesmo tempo (soma, pares, primos, "
         "Fibonacci, sequências, amplitude e frequência recente). Continua sendo "
