@@ -20,6 +20,9 @@ BANCO = "loterias.db"
 DEZENA_MIN, DEZENA_MAX = 1, 31
 QTD_DEZENAS_POR_JOGO = 7
 API_BASE = "https://servicebus2.caixa.gov.br/portaldeloterias/api/diadesorte"
+COLUNAS_DEZENAS = ["bola1", "bola2", "bola3", "bola4", "bola5", "bola6", "bola7"]
+PRIMOS = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31}
+FIBONACCI = {1, 2, 3, 5, 8, 13, 21}
 
 # A Caixa bloqueia requisições que não parecem vir de um navegador comum,
 # então simulamos os cabeçalhos de um navegador real.
@@ -65,6 +68,104 @@ def calcular_atraso(df):
     for dezena in range(DEZENA_MIN, DEZENA_MAX + 1):
         atrasos[dezena] = (total - 1 - ultimo_visto[dezena]) if dezena in ultimo_visto else total
     return atrasos
+
+
+# ---------------------------------------------------------------------------
+# Estatísticas avançadas
+# ---------------------------------------------------------------------------
+
+def calcular_frequencia_janela(df, janela):
+    """Frequência de cada dezena só nos últimos N concursos."""
+    sub = df.tail(janela)
+    contador = Counter()
+    for col in COLUNAS_DEZENAS:
+        contador.update(sub[col].tolist())
+    return {d: contador.get(d, 0) for d in range(DEZENA_MIN, DEZENA_MAX + 1)}
+
+
+def calcular_coocorrencia_top(df, top_n=15):
+    """Pares de dezenas que mais saíram juntas no mesmo concurso."""
+    pares = Counter()
+    for linha in df[COLUNAS_DEZENAS].itertuples(index=False):
+        numeros = sorted(linha)
+        for i in range(len(numeros)):
+            for j in range(i + 1, len(numeros)):
+                pares[(numeros[i], numeros[j])] += 1
+    return pares.most_common(top_n)
+
+
+def calcular_sequencias(df):
+    """Distribuição de quantos pares de dezenas consecutivas (ex: 14-15) saíram por concurso."""
+    contagem = Counter()
+    for linha in df[COLUNAS_DEZENAS].itertuples(index=False):
+        numeros = sorted(linha)
+        seguidas = sum(1 for i in range(1, len(numeros)) if numeros[i] == numeros[i - 1] + 1)
+        contagem[seguidas] += 1
+    return contagem
+
+
+def contagem_por_criterio(df, conjunto):
+    """Distribuição de quantas dezenas do conjunto dado (primos, fibonacci, etc.) saíram por concurso."""
+    contagem = Counter()
+    for linha in df[COLUNAS_DEZENAS].itertuples(index=False):
+        qtd = sum(1 for d in linha if d in conjunto)
+        contagem[qtd] += 1
+    return contagem
+
+
+def calcular_faixas(df):
+    """Quantas vezes cada faixa (1-10, 11-20, 21-31) apareceu no total de dezenas sorteadas."""
+    def faixa_de(d):
+        if d <= 10:
+            return "1 a 10"
+        elif d <= 20:
+            return "11 a 20"
+        return "21 a 31"
+
+    contador = Counter()
+    for col in COLUNAS_DEZENAS:
+        for d in df[col]:
+            contador[faixa_de(d)] += 1
+    return contador
+
+
+def calcular_terminacoes(df):
+    """Frequência de cada dígito final (0-9) entre todas as dezenas sorteadas."""
+    contador = Counter()
+    for col in COLUNAS_DEZENAS:
+        for d in df[col]:
+            contador[d % 10] += 1
+    return contador
+
+
+def calcular_amplitude(df):
+    """Diferença entre a maior e a menor dezena de cada concurso."""
+    return df[COLUNAS_DEZENAS].max(axis=1) - df[COLUNAS_DEZENAS].min(axis=1)
+
+
+def calcular_ciclos_fechamento(df):
+    """Tamanho de cada 'ciclo' até todas as 31 dezenas terem aparecido pelo menos uma vez."""
+    ciclos = []
+    vistos = set()
+    inicio = 0
+    for indice, linha in enumerate(df[COLUNAS_DEZENAS].itertuples(index=False)):
+        vistos.update(linha)
+        if len(vistos) == DEZENA_MAX:
+            ciclos.append(indice - inicio + 1)
+            vistos = set()
+            inicio = indice + 1
+    return ciclos
+
+
+def calcular_mes_sorte(df):
+    """Frequência e atraso de cada Mês da Sorte."""
+    contador = Counter(df["mes_da_sorte"])
+    total = len(df)
+    ultimo_visto = {}
+    for indice, mes in enumerate(df["mes_da_sorte"]):
+        ultimo_visto[mes] = indice
+    atraso = {mes: total - 1 - indice for mes, indice in ultimo_visto.items()}
+    return contador, atraso
 
 
 def jogo_valido(jogo, ultimo_concurso, soma_min, soma_max, pares_min, pares_max, max_repetidos):
@@ -262,7 +363,7 @@ def dezenas_html(dezenas, destaque=False):
 st.sidebar.markdown("### 🍀 Dia de Sorte")
 pagina = st.sidebar.radio(
     "Navegação",
-    ["📊 Estatísticas", "🎲 Gerador de Jogos", "🔍 Consultar Concurso", "🔄 Atualizar Base"],
+    ["📊 Estatísticas", "⭐ Estatísticas Avançadas", "🎲 Gerador de Jogos", "🔍 Consultar Concurso", "🔄 Atualizar Base"],
 )
 
 df = carregar_concursos()
@@ -301,6 +402,103 @@ if pagina == "📊 Estatísticas":
     c1.metric("Mínima", int(somas.min()))
     c2.metric("Média", f"{somas.mean():.1f}")
     c3.metric("Máxima", int(somas.max()))
+
+elif pagina == "⭐ Estatísticas Avançadas":
+    selo_topo("⭐", "Premium", "Estatísticas Avançadas")
+    st.caption(
+        "Camada extra de análise sobre o mesmo histórico. Continua descrevendo "
+        "o que já aconteceu — não prevê o próximo resultado."
+    )
+
+    aba1, aba2, aba3, aba4 = st.tabs([
+        "Frequência recente", "Dupla mais sorteada", "Padrões numéricos", "Ciclos & Mês da Sorte"
+    ])
+
+    with aba1:
+        st.subheader("Frequência em janela recente")
+        janela = st.select_slider("Considerar os últimos:", options=[25, 50, 100], value=50)
+        freq_recente = calcular_frequencia_janela(df, janela)
+        tabela_recente = pd.DataFrame({
+            "Dezena": list(freq_recente.keys()),
+            f"Vezes nos últimos {janela}": list(freq_recente.values()),
+        }).sort_values(f"Vezes nos últimos {janela}", ascending=False)
+        st.bar_chart(tabela_recente.set_index("Dezena"))
+        st.dataframe(tabela_recente, hide_index=True, use_container_width=True)
+
+    with aba2:
+        st.subheader("Pares de dezenas que mais saíram juntos")
+        top_pares = calcular_coocorrencia_top(df, 15)
+        for (a, b), vezes in top_pares:
+            st.markdown(
+                dezenas_html([a, b]) + f"<span style='color:#D9A441'>— saíram juntas {vezes} vezes</span>",
+                unsafe_allow_html=True,
+            )
+
+    with aba3:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Sequências consecutivas")
+            st.caption("Ex: 14 e 15 no mesmo jogo conta como 1 sequência.")
+            seq = calcular_sequencias(df)
+            tabela_seq = pd.DataFrame({
+                "Nº de pares consecutivos": list(seq.keys()), "Concursos": list(seq.values()),
+            }).sort_values("Nº de pares consecutivos")
+            st.dataframe(tabela_seq, hide_index=True, use_container_width=True)
+
+            st.subheader("Primos vs não-primos")
+            primos_dist = contagem_por_criterio(df, PRIMOS)
+            tabela_primos = pd.DataFrame({
+                "Qtd de primos no jogo": list(primos_dist.keys()), "Concursos": list(primos_dist.values()),
+            }).sort_values("Qtd de primos no jogo")
+            st.dataframe(tabela_primos, hide_index=True, use_container_width=True)
+
+            st.subheader("Números de Fibonacci")
+            st.caption("Curiosidade estatística (1, 2, 3, 5, 8, 13, 21) — não é padrão histórico causal.")
+            fib_dist = contagem_por_criterio(df, FIBONACCI)
+            tabela_fib = pd.DataFrame({
+                "Qtd Fibonacci no jogo": list(fib_dist.keys()), "Concursos": list(fib_dist.values()),
+            }).sort_values("Qtd Fibonacci no jogo")
+            st.dataframe(tabela_fib, hide_index=True, use_container_width=True)
+
+        with col2:
+            st.subheader("Distribuição por faixas")
+            faixas = calcular_faixas(df)
+            st.bar_chart(pd.Series(faixas, name="Vezes sorteada"))
+
+            st.subheader("Terminações (último dígito)")
+            terminacoes = calcular_terminacoes(df)
+            tabela_term = pd.DataFrame({
+                "Dígito final": list(terminacoes.keys()), "Vezes": list(terminacoes.values()),
+            }).sort_values("Dígito final")
+            st.bar_chart(tabela_term.set_index("Dígito final"))
+
+            st.subheader("Amplitude (maior − menor dezena)")
+            amplitudes = calcular_amplitude(df)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Mínima", int(amplitudes.min()))
+            c2.metric("Média", f"{amplitudes.mean():.1f}")
+            c3.metric("Máxima", int(amplitudes.max()))
+
+    with aba4:
+        st.subheader("Ciclos de fechamento")
+        st.caption("Quantos concursos, em média, até todas as 31 dezenas saírem pelo menos uma vez.")
+        ciclos = calcular_ciclos_fechamento(df)
+        if ciclos:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Ciclos completos", len(ciclos))
+            c2.metric("Média de concursos por ciclo", f"{sum(ciclos) / len(ciclos):.1f}")
+            c3.metric("Ciclo mais curto / mais longo", f"{min(ciclos)} / {max(ciclos)}")
+        else:
+            st.info("Ainda não há um ciclo completo fechado no histórico.")
+
+        st.subheader("Estatísticas do Mês da Sorte")
+        contador_mes, atraso_mes = calcular_mes_sorte(df)
+        tabela_mes = pd.DataFrame({
+            "Mês": list(contador_mes.keys()),
+            "Vezes sorteado": list(contador_mes.values()),
+            "Concursos sem sair": [atraso_mes[m] for m in contador_mes.keys()],
+        }).sort_values("Vezes sorteado", ascending=False)
+        st.dataframe(tabela_mes, hide_index=True, use_container_width=True)
 
 elif pagina == "🎲 Gerador de Jogos":
     selo_topo("🎲", "Ferramenta", "Gerador de Jogos")
